@@ -7,14 +7,14 @@
 BASEDIR="$(dirname "$0")"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Farben für bessere Ausgabe
+# Colors for better output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Funktion für farbige Ausgabe
+# Function for colored output
 print_status() {
     echo -e "${GREEN}[INFO]${NC} $1"
 }
@@ -27,125 +27,125 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Installation und Setup
+# Installation and setup
 setup_installation() {
-    print_status "Überprüfe Installation..."
+    print_status "Checking installation..."
     
-    # Prüfe ob receiver_cfg Ordner und Dateien existieren
+    # Check if receiver_cfg folder and files exist
     if [[ ! -f "${BASEDIR}/receiver_cfg/LC29HBS_Configure.txt" ]]; then
-        print_warning "receiver_cfg Dateien nicht gefunden. Kopiere Dateien..."
+        print_warning "receiver_cfg files not found. Copying files..."
                 
-        # Kopiere Dateien vom aktuellen Script-Verzeichnis
+        # Copy files from the current script directory
         if [[ -d "${SCRIPT_DIR}/receiver_cfg" ]]; then
             cp -r "${SCRIPT_DIR}/receiver_cfg"/* "${BASEDIR}/receiver_cfg/"
-            print_status "receiver_cfg Dateien kopiert"
+            print_status "receiver_cfg files copied"
         else
-            print_error "Quell-receiver_cfg Ordner nicht gefunden in ${SCRIPT_DIR}"
+            print_error "Source receiver_cfg folder not found in ${SCRIPT_DIR}"
             return 1
         fi
         
         if [[ -d "${SCRIPT_DIR}/tools" ]]; then
             cp -r "${SCRIPT_DIR}/tools"/* "${BASEDIR}/tools/"
-            print_status "tools Dateien kopiert"
+            print_status "tools files copied"
         else
-            print_error "Quell-tools Ordner nicht gefunden in ${SCRIPT_DIR}"
+            print_error "Source tools folder not found in ${SCRIPT_DIR}"
             return 1
         fi
     else
-        print_status "receiver_cfg Dateien bereits vorhanden"
+        print_status "receiver_cfg files already present"
     fi
     
-    # Prüfe und erstelle settings.conf
+    # Check and create settings.conf
     if [[ ! -f "${BASEDIR}/settings.conf" ]]; then
         if [[ -f "${BASEDIR}/settings.conf.default" ]]; then
             cp "${BASEDIR}/settings.conf.default" "${BASEDIR}/settings.conf"
-            print_status "settings.conf von default erstellt"
+            print_status "settings.conf created from default"
         else
-            print_error "settings.conf.default nicht gefunden"
+            print_error "settings.conf.default not found"
             return 1
         fi
     fi
     
-    # Konfiguriere settings.conf
+    # Configure settings.conf
     configure_settings
     
     return 0
 }
 
-# Settings konfigurieren
+# Configure settings
 configure_settings() {
-    print_status "Konfiguriere settings.conf..."
+    print_status "Configuring settings.conf..."
     
-    echo -e "\n${BLUE}Wählen Sie Ihre Hardware-Konfiguration:${NC}"
+    echo -e "\n${BLUE}Select your hardware configuration:${NC}"
     echo "1) Waveshare HAT (ttyS0, 115200 baud)"
-    echo "2) Benutzerdefiniert"
+    echo "2) Custom"
     
-    read -p "Ihre Wahl (1-2): " hw_choice
+    read -p "Your choice (1-2): " hw_choice
     
     case $hw_choice in
         1)
-            # Waveshare Konfiguration
+            # Waveshare configuration
             sed -i 's/^com_port=.*/com_port=ttyS0/' "${BASEDIR}/settings.conf"
             sed -i 's/^com_port_settings=.*/com_port_settings=115200:8:n:1/' "${BASEDIR}/settings.conf"
             sed -i 's/^receiver=.*/receiver=Quectel LC29HBS/' "${BASEDIR}/settings.conf"
-            print_status "Waveshare Konfiguration gesetzt"
+            print_status "Waveshare configuration applied"
             ;;
         2)
-            # Benutzerdefinierte Konfiguration
-            read -p "COM Port (z.B. ttyUSB0): " custom_port
-            read -p "Baudrate (z.B. 115200): " custom_baud
+            # Custom configuration
+            read -p "COM Port (e.g. ttyUSB0): " custom_port
+            read -p "Baud rate (e.g. 115200): " custom_baud
             
             sed -i "s/^com_port=.*/com_port=${custom_port}/" "${BASEDIR}/settings.conf"
             sed -i "s/^com_port_settings=.*/com_port_settings=${custom_baud}:8:n:1/" "${BASEDIR}/settings.conf"
             sed -i 's/^receiver=.*/receiver=Quectel LC29HBS/' "${BASEDIR}/settings.conf"
-            print_status "Benutzerdefinierte Konfiguration gesetzt"
+            print_status "Custom configuration applied"
             ;;
         *)
-            print_warning "Ungültige Auswahl, verwende Standardwerte"
+            print_warning "Invalid selection, using default values"
             ;;
     esac
 }
 
-# NMEA Kommando ausführen
+# Execute NMEA command
 execute_nmea_command() {
     local file="$1"
     local description="$2"
     
     if [[ ! -f "${BASEDIR}/receiver_cfg/${file}" ]]; then
-        print_error "Datei ${file} nicht gefunden"
+        print_error "File ${file} not found"
         return 1
     fi
     
-    print_status "Führe aus: ${description}"
+    print_status "Executing: ${description}"
     python3 "${BASEDIR}"/tools/nmea.py --file "${BASEDIR}"/receiver_cfg/"${file}" /dev/"${com_port}" "${speed}" 3
     
     if [[ $? -eq 0 ]]; then
-        print_status "${description} erfolgreich ausgeführt"
+        print_status "${description} executed successfully"
         return 0
     else
-        print_error "${description} fehlgeschlagen"
+        print_error "${description} failed"
         return 1
     fi
 }
 
-# Menü für LC29HBS Konfiguration
+# Menu for LC29HBS configuration
 show_lc29hbs_menu() {
     while true; do
-        echo -e "\n${BLUE}=== Quectel LC29HBS Konfiguration ===${NC}"
-        echo "Port: /dev/${com_port} | Geschwindigkeit: ${speed}"
+        echo -e "\n${BLUE}=== Quectel LC29HBS Configuration ===${NC}"
+        echo "Port: /dev/${com_port} | Speed: ${speed}"
         echo ""
-        echo "1) Alle Schritte ausführen (Factory Defaults → Configure → Save)"
-        echo "2) Nur Configure und Save"
-        echo "3) Nur Factory Defaults"
-        echo "4) Nur Configure"
-        echo "5) Nur Save"
-        echo "6) Zurück zum Hauptmenü"
+        echo "1) Run all steps (Factory Defaults -> Configure -> Save)"
+        echo "2) Configure and Save only"
+        echo "3) Factory Defaults only"
+        echo "4) Configure only"
+        echo "5) Save only"
+        echo "6) Back to main menu"
         echo ""
-        read -p "Ihre Wahl (1-6): " choice
+        read -p "Your choice (1-6): " choice
         
         case $choice in
             1)
-                print_status "Führe alle Schritte aus..."
+                print_status "Running all steps..."
                 execute_nmea_command "LC29HBS_Factory_Defaults.txt" "Factory Defaults"
                 sleep 2
                 execute_nmea_command "LC29HBS_Configure.txt" "Configuration"
@@ -153,7 +153,7 @@ show_lc29hbs_menu() {
                 execute_nmea_command "LC29HBS_Save.txt" "Save Configuration"
                 ;;
             2)
-                print_status "Führe Configure und Save aus..."
+                print_status "Running Configure and Save..."
                 execute_nmea_command "LC29HBS_Configure.txt" "Configuration"
                 sleep 2
                 execute_nmea_command "LC29HBS_Save.txt" "Save Configuration"
@@ -171,25 +171,25 @@ show_lc29hbs_menu() {
                 break
                 ;;
             *)
-                print_warning "Ungültige Auswahl"
+                print_warning "Invalid selection"
                 ;;
         esac
         
         echo ""
-        read -p "Drücken Sie Enter um fortzufahren..."
+        read -p "Press Enter to continue..."
     done
 }
 
-# Hauptmenü
+# Main menu
 show_main_menu() {
     while true; do
-        echo -e "\n${BLUE}=== GPS Konfiguration Tool ===${NC}"
-        echo "1) Installation/Setup durchführen"
-        echo "2) Settings neu konfigurieren"
-        echo "3) GPS Modul konfigurieren"
-        echo "4) Beenden"
+        echo -e "\n${BLUE}=== GPS Configuration Tool ===${NC}"
+        echo "1) Run installation/setup"
+        echo "2) Reconfigure settings"
+        echo "3) Configure GPS module"
+        echo "4) Exit"
         echo ""
-        read -p "Ihre Wahl (1-4): " main_choice
+        read -p "Your choice (1-4): " main_choice
         
         case $main_choice in
             1)
@@ -199,7 +199,7 @@ show_main_menu() {
                 configure_settings
                 ;;
             3)
-                # Lade Settings
+                # Load settings
                 if [[ -f "${BASEDIR}/settings.conf" ]]; then
                     source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
                     
@@ -207,35 +207,35 @@ show_main_menu() {
                         speed="${com_port_settings%%:*}"
                         show_lc29hbs_menu
                     else
-                        print_error "Receiver '${receiver}' wird nicht unterstützt"
+                        print_error "Receiver '${receiver}' is not supported"
                     fi
                 else
-                    print_error "settings.conf nicht gefunden. Führen Sie zuerst die Installation durch."
+                    print_error "settings.conf not found. Please run installation first."
                 fi
                 ;;
             4)
-                print_status "Programm beendet"
+                print_status "Program exited"
                 exit 0
                 ;;
             *)
-                print_warning "Ungültige Auswahl"
+                print_warning "Invalid selection"
                 ;;
         esac
     done
 }
 
-# Hauptprogramm
+# Main program
 main() {
-    echo -e "${GREEN}GPS Konfiguration Tool gestartet${NC}"
+    echo -e "${GREEN}GPS Configuration Tool started${NC}"
     
-    # Prüfe ob Python3 verfügbar ist
+    # Check if Python3 is available
     if ! command -v python3 &> /dev/null; then
-        print_error "Python3 ist nicht installiert"
+        print_error "Python3 is not installed"
         exit 1
     fi
     
     show_main_menu
 }
 
-# Script starten
+# Start script
 main "$@"
