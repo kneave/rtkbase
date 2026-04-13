@@ -14,6 +14,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+LC29HBS_REQUIRED_FILES=(
+    "LC29HBS_Factory_Defaults.txt"
+    "LC29HBS_Configure.txt"
+    "LC29HBS_Save.txt"
+)
+
 # Function for colored output
 print_status() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -27,29 +33,72 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Build a full NMEA sentence by appending checksum when missing
+build_nmea_sentence() {
+    local sentence="$1"
+    local payload checksum i c ord
+
+    if [[ "${sentence}" == *\** ]]; then
+        printf '%s' "${sentence}"
+        return 0
+    fi
+
+    payload="${sentence#\$}"
+    checksum=0
+    for ((i=0; i<${#payload}; i++)); do
+        c="${payload:i:1}"
+        printf -v ord '%d' "'${c}"
+        ((checksum ^= ord))
+    done
+
+    printf '$%s*%02X' "${payload}" "${checksum}"
+}
+
+# Validate required LC29HBS command files are present
+validate_lc29hbs_files() {
+    local cfg_dir="${BASEDIR}/receiver_cfg"
+    local missing=()
+    local f
+
+    for f in "${LC29HBS_REQUIRED_FILES[@]}"; do
+        [[ -f "${cfg_dir}/${f}" ]] || missing+=("${f}")
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        print_error "Missing LC29HBS command files in ${cfg_dir}"
+        for f in "${missing[@]}"; do
+            print_error "  - ${f}"
+        done
+        print_warning "Add the missing files and run the script again."
+        return 1
+    fi
+
+    return 0
+}
+
 # Installation and setup
 setup_installation() {
     print_status "Checking installation..."
+
+    mkdir -p "${BASEDIR}/receiver_cfg" "${BASEDIR}/tools"
     
     # Check if receiver_cfg folder and files exist
     if [[ ! -f "${BASEDIR}/receiver_cfg/LC29HBS_Configure.txt" ]]; then
         print_warning "receiver_cfg files not found. Copying files..."
                 
         # Copy files from the current script directory
-        if [[ -d "${SCRIPT_DIR}/receiver_cfg" ]]; then
+        if [[ "${SCRIPT_DIR}" != "${BASEDIR}" && -d "${SCRIPT_DIR}/receiver_cfg" ]]; then
             cp -r "${SCRIPT_DIR}/receiver_cfg"/* "${BASEDIR}/receiver_cfg/"
             print_status "receiver_cfg files copied"
         else
-            print_error "Source receiver_cfg folder not found in ${SCRIPT_DIR}"
-            return 1
+            print_warning "No alternate receiver_cfg source found in ${SCRIPT_DIR}"
         fi
         
-        if [[ -d "${SCRIPT_DIR}/tools" ]]; then
+        if [[ "${SCRIPT_DIR}" != "${BASEDIR}" && -d "${SCRIPT_DIR}/tools" ]]; then
             cp -r "${SCRIPT_DIR}/tools"/* "${BASEDIR}/tools/"
             print_status "tools files copied"
         else
-            print_error "Source tools folder not found in ${SCRIPT_DIR}"
-            return 1
+            print_warning "No alternate tools source found in ${SCRIPT_DIR}"
         fi
     else
         print_status "receiver_cfg files already present"
@@ -68,6 +117,9 @@ setup_installation() {
     
     # Configure settings.conf
     configure_settings
+
+    # Final validation for LC29HBS mode
+    validate_lc29hbs_files || return 1
     
     return 0
 }
@@ -87,7 +139,7 @@ configure_settings() {
             # Waveshare configuration
             sed -i 's/^com_port=.*/com_port=ttyS0/' "${BASEDIR}/settings.conf"
             sed -i 's/^com_port_settings=.*/com_port_settings=115200:8:n:1/' "${BASEDIR}/settings.conf"
-            sed -i 's/^receiver=.*/receiver=Quectel LC29HBS/' "${BASEDIR}/settings.conf"
+            sed -i 's/^receiver=.*/receiver="Quectel LC29HBS"/' "${BASEDIR}/settings.conf"
             print_status "Waveshare configuration applied"
             ;;
         2)
@@ -97,7 +149,7 @@ configure_settings() {
             
             sed -i "s/^com_port=.*/com_port=${custom_port}/" "${BASEDIR}/settings.conf"
             sed -i "s/^com_port_settings=.*/com_port_settings=${custom_baud}:8:n:1/" "${BASEDIR}/settings.conf"
-            sed -i 's/^receiver=.*/receiver=Quectel LC29HBS/' "${BASEDIR}/settings.conf"
+            sed -i 's/^receiver=.*/receiver="Quectel LC29HBS"/' "${BASEDIR}/settings.conf"
             print_status "Custom configuration applied"
             ;;
         *)
@@ -106,18 +158,91 @@ configure_settings() {
     esac
 }
 
+# Load selected keys from settings.conf safely (supports values with spaces)
+load_settings() {
+    local key value
+
+    com_port=""
+    com_port_settings=""
+    receiver=""
+
+    while IFS='=' read -r key value; do
+        # Skip comments and empty lines
+        [[ -z "${key}" || "${key}" =~ ^[[:space:]]*# ]] && continue
+
+        # Trim spaces around key and value
+        key="${key#${key%%[![:space:]]*}}"
+        key="${key%${key##*[![:space:]]}}"
+        value="${value#${value%%[![:space:]]*}}"
+        value="${value%${value##*[![:space:]]}}"
+
+        # Remove optional surrounding quotes
+        if [[ "${value}" =~ ^\".*\"$ ]]; then
+            value="${value:1:${#value}-2}"
+        fi
+
+        case "${key}" in
+            com_port|com_port_settings|receiver)
+                printf -v "${key}" '%s' "${value}"
+                ;;
+        esac
+    done < "${BASEDIR}/settings.conf"
+}
+
 # Execute NMEA command
 execute_nmea_command() {
     local file="$1"
     local description="$2"
+    local cfg_path="${BASEDIR}/receiver_cfg/${file}"
+    local device="/dev/${com_port}"
+    local line trimmed sentence
     
-    if [[ ! -f "${BASEDIR}/receiver_cfg/${file}" ]]; then
+    if [[ ! -f "${cfg_path}" ]]; then
         print_error "File ${file} not found"
+        return 1
+    fi
+
+    if [[ -z "${com_port}" || -z "${speed}" ]]; then
+        print_error "Serial settings are missing (com_port='${com_port}', speed='${speed}')"
+        return 1
+    fi
+
+    if [[ ! -e "${device}" ]]; then
+        print_error "Serial device ${device} not found"
+        return 1
+    fi
+
+    if ! stty -F "${device}" "${speed}" cs8 -cstopb -parenb -ixon -ixoff -icanon -echo min 1 time 1; then
+        print_error "Unable to configure serial device ${device} at ${speed} baud"
         return 1
     fi
     
     print_status "Executing: ${description}"
-    python3 "${BASEDIR}"/tools/nmea.py --file "${BASEDIR}"/receiver_cfg/"${file}" /dev/"${com_port}" "${speed}" 3
+
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        line="${line%$'\r'}"
+
+        # Trim leading/trailing whitespace
+        trimmed="${line#${line%%[![:space:]]*}}"
+        trimmed="${trimmed%${trimmed##*[![:space:]]}}"
+
+        [[ -z "${trimmed}" || "${trimmed}" == \#* ]] && continue
+
+        if [[ "${trimmed}" != \$* ]]; then
+            print_warning "Skipping invalid command line: ${trimmed}"
+            continue
+        fi
+
+        sentence="$(build_nmea_sentence "${trimmed}")"
+
+        if ! printf '%s\r\n' "${sentence}" > "${device}"; then
+            print_error "Failed to send command '${sentence}' to ${device}"
+            return 1
+        fi
+
+        # Allow receiver to process sequential commands
+        sleep 0.2
+    done < "${cfg_path}"
     
     if [[ $? -eq 0 ]]; then
         print_status "${description} executed successfully"
@@ -130,6 +255,8 @@ execute_nmea_command() {
 
 # Menu for LC29HBS configuration
 show_lc29hbs_menu() {
+    validate_lc29hbs_files || return 1
+
     while true; do
         echo -e "\n${BLUE}=== Quectel LC29HBS Configuration ===${NC}"
         echo "Port: /dev/${com_port} | Speed: ${speed}"
@@ -201,7 +328,7 @@ show_main_menu() {
             3)
                 # Load settings
                 if [[ -f "${BASEDIR}/settings.conf" ]]; then
-                    source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
+                    load_settings
                     
                     if [[ "${receiver}" = "Quectel LC29HBS" ]]; then
                         speed="${com_port_settings%%:*}"
