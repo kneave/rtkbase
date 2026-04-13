@@ -54,6 +54,21 @@ If you use a Raspberry Pi, thanks to [jancelin](https://github.com/jancelin), yo
    - [rtklibexplorer - PPP - for dual frequency receivers](https://rtklibexplorer.wordpress.com/2017/11/23/ppp-solutions-with-the-swiftnav-piksi-multi/)
    - [Centipede documentation (in french)](https://docs.centipede.fr/docs/base/positionnement.html)
 
+## In-place project update:
+If RTKBase is already installed on a machine and you want to refresh it from a checkout of this repository without reinstalling the whole system, run this from the project tree on that machine:
+
+```bash
+sudo ./install.sh --user your_username --update
+```
+
+Or, from the installed tree itself:
+
+```bash
+sudo ./tools/install.sh --user your_username --update
+```
+
+This updates the deployed project files in place, preserves your existing `settings.conf`, data directory and virtual environment contents, then reapplies Python requirements and systemd unit files.
+
 ## Manual installation: 
 The `install.sh` script can be used without the `--all` option to split the installation process into several different steps:
 ```

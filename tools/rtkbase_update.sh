@@ -209,6 +209,20 @@ upd_2.6.0() {
   fi
 }
 
+run_specific_update() {
+  local update_function
+  update_function="upd_${old_version/b*/b}"
+
+  if declare -F "${update_function}" > /dev/null
+  then
+    echo "Starting specific update: ${update_function}"
+    "${update_function}" "$@"
+  else
+    echo "No release-specific update steps for ${old_version}"
+    return 0
+  fi
+}
+
 #check if we can apply the update
 #FOR THE OLDER ME -> Don't forget to modify the os detection if there is a 2.5.x release !!!
 [[ $checking == '--checking' ]] && check_before_update && exit
@@ -218,8 +232,7 @@ echo 'Starting standard update'
 echo '################################'
 update || { echo 'Update failed (update)' ; exit 1 ;} 
 # calling specific update function. If we are using v2.2.5, it will call the function upd_2.2.5
-echo 'Starting specific update'
-upd_"${old_version/b*/b}" "$@"  || { echo 'Update failed (upd_release_number)' ; exit 1 ;} 
+run_specific_update "$@"  || { echo 'Update failed (upd_release_number)' ; exit 1 ;} 
 #note for older me:
 #When dealing with beta version, "${oldversion/b*/b}" will call function 2.4b when we use a release 2.4b1 or 2.4b2 or 2.4beta99
 

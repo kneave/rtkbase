@@ -76,6 +76,10 @@ man_help(){
     echo '        -s | --start-services'
     echo '                         Start services (rtkbase_web, str2str_tcp, gpsd, chrony)'
     echo ''
+    echo '        -p | --update'
+    echo '                         Update an existing RTKBase installation in place from this project tree.'
+    echo '                         This keeps instance data and settings, then refreshes requirements and unit files.'
+    echo ''
     echo '        -h | --help'
     echo '                          Display this help message.'
 
@@ -310,6 +314,65 @@ _add_rtkbase_path_to_environment(){
     fi
     rtkbase_path=$(pwd)/rtkbase
     export rtkbase_path
+}
+
+_get_source_tree_path() {
+    local script_dir
+    script_dir=$(dirname "$(readlink -f "$0")")
+
+    if [[ -f "${script_dir}/settings.conf.default" ]]
+    then
+      printf '%s\n' "${script_dir}"
+    elif [[ -f "${script_dir}/../settings.conf.default" ]]
+    then
+      printf '%s\n' "$(dirname "${script_dir}")"
+    else
+      return 1
+    fi
+}
+
+update_rtkbase_in_place() {
+    echo '################################'
+    echo 'UPDATING RTKBASE IN PLACE'
+    echo '################################'
+
+    local source_path
+    local current_version
+    local data_dir
+
+    source_path=$(_get_source_tree_path) || {
+      echo 'Unable to locate the RTKBase source tree from this install script.'
+      return 1
+    }
+
+    if [[ ! -d "${rtkbase_path}" ]]
+    then
+      echo 'Existing RTKBase installation not found. Check rtkbase_path in /etc/environment or install RTKBase first.'
+      return 1
+    fi
+
+    if [[ ! -f "${rtkbase_path}/settings.conf" ]]
+    then
+      echo 'Missing settings.conf in the existing RTKBase installation.'
+      return 1
+    fi
+
+    current_version=$(awk -F '=' '/^version=/{print $2; exit}' "${rtkbase_path}/settings.conf" | tr -d "'" | sed 's/^v//')
+    [[ -z "${current_version}" ]] && current_version=$(awk -F '=' '/^version=/{print $2; exit}' "${rtkbase_path}/settings.conf.default" | tr -d "'" | sed 's/^v//')
+    [[ -z "${current_version}" ]] && current_version='0.0.0'
+
+    data_dir=$(awk -F '=' '/^datadir=/{print $2; exit}' "${rtkbase_path}/settings.conf" | tr -d "'")
+    data_dir=$(basename "${data_dir:-data}")
+
+    if [[ "$(readlink -f "${source_path}")" != "$(readlink -f "${rtkbase_path}")" ]]
+    then
+      "${source_path}/tools/rtkbase_update.sh" "${source_path}" "${rtkbase_path}" "${data_dir}" "${current_version}" "${RTKBASE_USER}" || return 1
+    else
+      echo 'Source tree matches the installed RTKBase path, skipping file copy.'
+    fi
+
+    "${rtkbase_path}/tools/install.sh" --user "${RTKBASE_USER}" --rtkbase-requirements --unit-files || return 1
+    systemctl restart rtkbase_web.service
 }
 
 rtkbase_requirements(){
@@ -666,9 +729,10 @@ main() {
   ARG_CONFIGURE_GNSS=0
   ARG_DETECT_MODEM=0
   ARG_START_SERVICES=0
+  ARG_UPDATE=0
   ARG_ALL=0
 
-  PARSED_ARGUMENTS=$(getopt --name install --options hu:drbi:jf:qtgencmsa: --longoptions help,user:,dependencies,rtklib,rtkbase-release,rtkbase-repo:,rtkbase-bundled,rtkbase-custom:,rtkbase-requirements,unit-files,gpsd-chrony,detect-gnss,no-write-port,configure-gnss,detect-modem,start-services,all: -- "$@")
+  PARSED_ARGUMENTS=$(getopt --name install --options hu:drbi:jf:qtgencmspa: --longoptions help,user:,dependencies,rtklib,rtkbase-release,rtkbase-repo:,rtkbase-bundled,rtkbase-custom:,rtkbase-requirements,unit-files,gpsd-chrony,detect-gnss,no-write-port,configure-gnss,detect-modem,start-services,update,all: -- "$@")
   VALID_ARGUMENTS=$?
   if [ "$VALID_ARGUMENTS" != "0" ]; then
     #man_help
@@ -697,6 +761,7 @@ main() {
         -c | --configure-gnss) ARG_CONFIGURE_GNSS=1    ; shift   ;;
         -m | --detect-modem) ARG_DETECT_MODEM=1        ; shift   ;;
         -s | --start-services) ARG_START_SERVICES=1    ; shift   ;;
+        -p | --update) ARG_UPDATE=1                    ; shift   ;;
         -a | --all) ARG_ALL="${2}"                     ; shift 2 ;;
         # -- means the end of the arguments; drop this, and break out of the while loop
         --) shift; break ;;
@@ -758,6 +823,7 @@ main() {
   [ $ARG_DETECT_GNSS -eq 1 ] &&  { detect_gnss "${ARG_NO_WRITE_PORT}" ; ((cumulative_exit+=$?)) ;}
   [ $ARG_CONFIGURE_GNSS -eq 1 ] && { configure_gnss ; ((cumulative_exit+=$?)) ;}
   [ $ARG_DETECT_MODEM -eq 1 ] && { detect_usb_modem && _add_modem_port && _configure_modem ; ((cumulative_exit+=$?)) ;}
+  [ $ARG_UPDATE -eq 1 ] && { update_rtkbase_in_place ; ((cumulative_exit+=$?)) ;}
   [ $ARG_START_SERVICES -eq 1 ] && { start_services ; ((cumulative_exit+=$?)) ;}
 }
 
