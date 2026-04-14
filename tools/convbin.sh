@@ -44,14 +44,14 @@ convert_to_rinex_ign_bis() {
   "${CONVBIN_PATH}" "${args}"
     return $?
 }
-# Rinex v3.04 - 30s -  GPS + GLONASS
+# Rinex v3.04 - 30s -  GPS + GLONASS + GALILEO
 convert_to_rinex_nrcan() {
   echo "- CREATING RINEX " "${RINEX_FILE}"
   "${CONVBIN_PATH}" "${raw_file}" -v 3.04 -r "${RAW_TYPE}"       \
         -hc "${RTKBASE_VERSION}" -hm "${MOUNT_NAME}"   \
         -hp "${ANT_POSITION}" -ha 0000/"${ANT_TYPE}"   \
         -hr 0000/"${RECEIVER}"/"${REC_VERSION}"        \
-        -f 2 -y E -y J -y S -y C -y I                  \
+        -f 2 -y J -y S -y C -y I                  \
         -od -os -oi -ot -ti 30 -tt 0                   \
         -ro "${REC_OPTION}" -o "${RINEX_FILE}"
     return $?
@@ -94,12 +94,17 @@ elif [[ ${RINEX_TYPE} == '30s_full' ]] ; then rnx_conversion_func='convert_to_ri
 elif [[ ${RINEX_TYPE} == '1s_full' ]] ; then rnx_conversion_func='convert_to_rinex_1s_full' ; RINEX_FILE=$(echo "${filedate}"-"${MOUNT_NAME}"_"${RINEX_TYPE}".obs)
 fi
 
-
 #Let's launch the CONVBIN process
 echo "- Processing on	""${RAW_ARCHIVE}"
-extract_raw_file                  && \
-${rnx_conversion_func}            && \
+file_extension="${RAW_ARCHIVE##*.}"
+if [[ $file_extension == 'zip' ]]
+  then
+    extract_raw_file
+  else 
+    raw_file="${RAW_ARCHIVE}"
+fi
+${rnx_conversion_func}
 return_code=$?
 echo -n 'rinex_file='"${RINEX_FILE}"
-rm "${raw_file}"
+[[ $file_extension == 'zip' ]] && rm "${raw_file}"
 exit $return_code

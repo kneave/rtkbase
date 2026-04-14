@@ -49,21 +49,21 @@ check_before_update() {
 
   case $ID in
     debian)
-      if (( $(echo "$VERSION_ID < 11" | bc -l) ))
+      if (( $(echo "$VERSION_ID < 12" | bc -l) ))
       then
         printf "${TOO_OLD}" >/dev/stderr
         exit 1
       fi
       ;;
     raspbian)
-    if (( $(echo "$VERSION_ID < 11" | bc -l) ))
+    if (( $(echo "$VERSION_ID < 12" | bc -l) ))
       then
         printf "${TOO_OLD}" >/dev/stderr
         exit 1
       fi
       ;;
     ubuntu)
-      if (( $(echo "$VERSION_ID < 22.04" | bc -l) ))
+      if (( $(echo "$VERSION_ID < 24.04" | bc -l) ))
       then
         printf "${TOO_OLD}" >/dev/stderr
         exit 1
@@ -73,24 +73,24 @@ check_before_update() {
 }
 
 update() {
-echo 'remove existing rtkbase.old directory'
-rm -rf /var/tmp/rtkbase.old
-mkdir /var/tmp/rtkbase.old
+  echo 'remove existing rtkbase.old directory'
+  rm -rf /var/tmp/rtkbase.old
+  mkdir /var/tmp/rtkbase.old
 
-echo "copy rtkbase to rtkbase.old except /data directory"
-cp -r ${destination_directory}/!(${data_dir}|venv) /var/tmp/rtkbase.old
+  echo "copy rtkbase to rtkbase.old except /data directory"
+  cp -r ${destination_directory}/!(${data_dir}|venv) /var/tmp/rtkbase.old
 
-#Don't do that or it will stop the update process
-#systemctl stop rtkbase_web.service
+  #Don't do that or it will stop the update process
+  #systemctl stop rtkbase_web.service
 
-echo "copy new release to destination"
-if [[ -d ${source_directory} ]] && [[ -d ${destination_directory} ]] 
-  then
-    cp -rfp ${source_directory}/. ${destination_directory}
-  else
-    echo 'can t copy'
-    exit 1
-fi
+  echo "copy new release to destination"
+  if [[ -d ${source_directory} ]] && [[ -d ${destination_directory} ]] 
+    then
+      cp -rfp ${source_directory}/. ${destination_directory}
+    else
+      echo 'can t copy'
+      exit 1
+  fi
 }
 
 insert_rtcm_msg() {
@@ -200,6 +200,9 @@ upd_2.5.0 () {
 }
 
 upd_2.6.0() {
+  echo '##########################'
+  echo 'Update from 2.6.0 to 2.6.1'
+  echo '##########################'
   # update modem_check_service file (see https://github.com/Stefal/rtkbase/commit/cfad1981e483d74da04f53b8d7b354661100d610)
   "${destination_directory}"/tools/install.sh --user "${standard_user}" --unit-files
   # build rtklib if current release doesn't work
@@ -207,6 +210,79 @@ upd_2.6.0() {
    then
      "${destination_directory}"/tools/install.sh --user "${standard_user}" --rtklib
   fi
+  upd_2.6.1 "$@"
+}
+
+upd_2.6.1() {
+  echo '##########################'
+  echo 'Update from 2.6.1 to 2.6.2'
+  echo '##########################'
+  #Remove firstboot service from the Raspberry 2.5 and 2.6 images
+  #This service should have been removed after the first boot, but
+  # wasn't and was stopping various RTKBase services at each boot. 
+  if [[ -f /etc/os-release ]]
+    then
+      source /etc/os-release
+  fi
+
+  if [[ $ID == debian ]] && systemctl list-units firstboot.service
+    then
+      systemctl disable --now firstboot.service
+      rm /lib/systemd/system/firstboot.service
+      systemctl daemon-reload
+  fi
+  upd_2.6.2 "$@"
+}
+
+upd_2.6.2() {
+  echo '##########################'
+  echo 'Update from 2.6.2 to 2.6.3'
+  echo '##########################'
+  #Remove firstboot service from the Raspberry 2.5 and 2.6 images
+  #This service should have been removed after the first boot, but
+  # wasn't and was stopping various RTKBase services at each boot. 
+  if [[ -f /etc/os-release ]]
+    then
+      source /etc/os-release
+  fi
+
+  if [[ $ID == raspbian ]] && systemctl list-units firstboot.service
+    then
+      systemctl disable --now firstboot.service
+      rm /lib/systemd/system/firstboot.service
+      systemctl daemon-reload
+  fi
+  upd_2.6.3 "$@"
+}
+
+upd_2.6.3() {
+  echo '##########################'
+  echo 'Update from 2.6.3 to 2.6.4'
+  echo '##########################'
+  # install updated service and new avahi service definition (forgot it on the previous update)
+  "${destination_directory}"/tools/install.sh --user "${standard_user}" --unit-files --zeroconf
+  upd_2.6.4 "$@"
+}
+
+upd_2.6.4() {
+  echo '##########################'
+  echo 'Update from 2.6.4 to 2.7.0'
+  echo '##########################'
+  # install updated service and new avahi service definition (forgot it on the previous update)
+  "${destination_directory}"/tools/install.sh --user "${standard_user}" --unit-files --zeroconf
+  # upgrade dependencies
+  "${destination_directory}"/tools/install.sh --user "${standard_user}" --dependencies --rtkbase-requirements
+  #upgrade rtklib to RTKLib 2.5
+  upgrade_rtklib
+  # restart str2str if it was active before upgrading rtklib
+  [ $str2str_active = 'active' ] && systemctl restart str2str_tcp 
+  [ $str2str_file = 'active' ] && systemctl restart str2str_file 
+  [ $rtkrcv_raw2nmea = 'active' ] && systemctl restart rtkbase_raw2nmea
+  # some users informed me that the archive time was not enabled, fix that:
+  ! systemctl is-active --quiet rtkbase_archive.timer && systemctl enable --now rtkbase_archive.timer
+  # restarting the gnss proxy service:
+  systemctl is-active --quiet rtkbase_gnss_web_proxy.service && systemctl restart rtkbase_gnss_web_proxy.service 
+  echo 'Main service restarted'
 }
 
 run_specific_update() {
@@ -224,7 +300,7 @@ run_specific_update() {
 }
 
 #check if we can apply the update
-#FOR THE OLDER ME -> Don't forget to modify the os detection if there is a 2.5.x release !!!
+#FOR THE OLDER ME -> Don't forget to modify the os detection if there is a 2.7.x release !!!
 [[ $checking == '--checking' ]] && check_before_update && exit
 
 echo '################################'

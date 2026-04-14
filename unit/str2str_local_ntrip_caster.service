@@ -3,9 +3,11 @@ Description=RTKBase local Ntrip Caster
 #After=network-online.target
 #Wants=network-online.target
 Requires=str2str_tcp.service
+After=str2str_tcp.service
 
 [Service]
-Type=forking
+Type=simple
+SyslogIdentifier=str2str_local_ntrip_caster
 User={user}
 ExecStart={script_path}/run_cast.sh in_tcp out_local_caster
 Restart=on-failure

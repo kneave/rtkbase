@@ -32,12 +32,15 @@ class ServiceController(object):
 
     def get_result(self):
         """
-            Get the service return status.
+            Get the unit return status.
             success => it's ok
             exit-code => str2str doesn't start successfully
             We can read a success between the startup and the first error
         """
-        return self.unit.Service.Result.decode()
+        if "org.freedesktop.systemd1.Service" in self.unit._interfaces:
+            return self.unit.Service.Result.decode()
+        elif "org.freedesktop.systemd1.Timer" in self.unit._interfaces:
+            return self.unit.Timer.Result.decode()
 
     def getUser(self):
         return self.unit.Service.User.decode()
@@ -52,12 +55,26 @@ class ServiceController(object):
         return (self.unit.Unit.SubState).decode()
 
     def start(self):
+        """
+            Start the unit.
+            It will reset the failed counter before starting the unit.
+        """
+        try:
+            self.manager.Manager.ResetFailedUnit(self.unit.Unit.Names[0])
+        except:
+            pass
         self.manager.Manager.EnableUnitFiles(self.unit.Unit.Names, False, True)
         return self.unit.Unit.Start(b'replace')
         
     def stop(self):
+        """
+            Stop the unit.
+        """
         self.manager.Manager.DisableUnitFiles(self.unit.Unit.Names, False)
         return self.unit.Unit.Stop(b'replace')
         
     def restart(self):
+        """
+            Restart the unit.
+        """
         return self.unit.Unit.Restart(b'replace')

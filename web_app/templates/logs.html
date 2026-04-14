@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 
 {% block styles %}
-<link rel="stylesheet" href="{{ url_for('static', filename='lib/bootstrap-table-1.21.1.min.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='lib/bootstrap-table-1.24.2.min.css') }}">
 {{super()}}
 {% endblock %}
 
@@ -55,7 +55,7 @@
       
         <!-- Modal Header -->
         <div class="modal-header">
-          <h4 class="modal-title">Convert raw file archive (zip) to rinex file</h4>
+          <h4 class="modal-title">Convert raw file to rinex file</h4>
           <button type="button" class="close" data-dismiss="modal">&times;</button>
         </div>
         
@@ -107,8 +107,7 @@
 
 {% block scripts %}
 {{super()}}
-<script type="text/javascript" src="{{ url_for('static', filename='lib/bootstrap-table-1.21.1.min.js') }}" charset="utf-8"></script>
-<script type="text/javascript" src="{{ url_for('static', filename='lib/bootstrap-table-mobile-1.21.1.min.js') }}" charset="utf-8"></script>
+<script type="text/javascript" src="{{ url_for('static', filename='lib/bootstrap-table-1.24.2.min.js') }}" charset="utf-8"></script>
 <script type="text/javascript" src="{{ url_for('static', filename='logs.js', v=g.version) }}" charset="utf-8"></script>
 
 {% endblock %}
