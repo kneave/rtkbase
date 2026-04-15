@@ -80,6 +80,12 @@ def write_command(connection, nmea_command: str, verbose: bool = False):
         print(f"Sent command: {Colour.OKBLUE}{nmea_command_with_checksum}{Colour.ENDC}")
 
 
+def send_command_batch(connection, commands: list[str], verbose: bool = False, delay: float = 0.2):
+    for command in commands:
+        write_command(connection, command, verbose)
+        time.sleep(delay)
+
+
 def queue_quectel_survey_commands(connection, min_dur: int, acc_limit: float, verbose: bool = False):
     survey_commands = [
         "$PQTMCFGRCVRMODE,W,2",
@@ -89,9 +95,7 @@ def queue_quectel_survey_commands(connection, min_dur: int, acc_limit: float, ve
         "$PQTMSRR",
     ]
 
-    for command in survey_commands:
-        write_command(connection, command, verbose)
-        time.sleep(0.2)
+    send_command_batch(connection, survey_commands, verbose)
 
 
 def wait_for_receiver_reset(connection, timeout: int, verbose: bool = False):
