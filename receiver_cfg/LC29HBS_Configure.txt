@@ -33,3 +33,6 @@ $PAIR062,7,1
 
 #Enable NMEA GST Position error statistics
 $PAIR062,8,1
+
+#Enable accuracy messages
+$PQTMCFGMSGRATE,W,PQTMEPE,1*1E
