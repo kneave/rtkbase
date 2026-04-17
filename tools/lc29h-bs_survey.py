@@ -2,21 +2,25 @@
 
 import argparse
 from contextlib import contextmanager
+import json
+from pathlib import Path
 import socket
 import time
 import re
 import sys
+from datetime import datetime, timezone
 from pyproj import Transformer
-
 try:
     import serial
-    Serial = serial.Serial
-    SerialException = serial.SerialException
-except (ImportError, AttributeError) as exc:
+except ImportError as exc:
     raise SystemExit(
-        "pyserial is required for serial connections, but Python imported an incompatible 'serial' package. "
-        "Uninstall the 'serial' package and install 'pyserial' instead."
+        "pyserial is required. Install it with: pip install pyserial"
     ) from exc
+
+if not hasattr(serial, 'Serial'):
+    raise SystemExit(
+        "The imported 'serial' module is not pyserial. Remove the conflicting 'serial' package and install pyserial."
+    )
 
 
 # Terminal colour codes
@@ -52,9 +56,9 @@ class ConnectionConfig:
 def open_connection(connection: ConnectionConfig, timeout: int):
     if connection.connection_type == 'serial':
         try:
-            with Serial(connection.endpoint, baudrate=connection.speed, timeout=timeout) as serial_connection:
+            with serial.Serial(connection.endpoint, baudrate=connection.speed, timeout=timeout) as serial_connection:
                 yield serial_connection
-        except SerialException as exc:
+        except serial.SerialException as exc:
             raise ConnectionError(f"Error opening serial port: {exc}") from exc
         return
 
@@ -75,8 +79,30 @@ def parse_tcp_endpoint(endpoint: str) -> tuple[str, int]:
     return host, int(port)
 
 
+def read_raw_line(connection) -> bytes:
+    return connection.readline()
+
+
 def read_line(connection) -> str:
-    return connection.readline().decode('ascii', errors='ignore').strip()
+    return read_raw_line(connection).decode('ascii', errors='ignore').strip()
+
+
+def format_serial_context(raw_response: bytes) -> str:
+    stripped = raw_response.strip()
+    if not stripped:
+        return '<empty line>'
+
+    decoded = stripped.decode('ascii', errors='ignore')
+    printable = ''.join(char if 32 <= ord(char) <= 126 else '.' for char in decoded)
+    hex_preview = stripped[:24].hex()
+
+    if printable.startswith('$'):
+        return printable
+
+    if printable:
+        return f"{printable} [hex:{hex_preview}]"
+
+    return f"<binary {len(stripped)} bytes> [hex:{hex_preview}]"
 
 
 def write_line(connection, message: str):
@@ -119,7 +145,13 @@ def wait_for_receiver_reset(connection, timeout: int, verbose: bool = False):
         return
 
 
-def monitor_survey_status(connection: ConnectionConfig, timeout: int, min_dur: int, verbose: bool = False):
+def write_survey_result(output_file: str, result: dict):
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+
+
+def monitor_survey_status(connection: ConnectionConfig, timeout: int, min_dur: int, output_file: str, verbose: bool = False):
     with open_connection(connection, timeout) as gps_connection:
         print(Colour.HEADER + Colour.BOLD + "Starting survey-in..." + Colour.ENDC)
 
@@ -143,7 +175,8 @@ def monitor_survey_status(connection: ConnectionConfig, timeout: int, min_dur: i
             mean_acc = status['mean_acc']
             obs_count = status['obs_count']
             elapsed_time = int(time.time() - start_time)
-            remaining_time = max(0, int(min_dur - elapsed_time))
+            target_duration = status['target_duration'] or min_dur
+            remaining_time = max(0, int(target_duration - elapsed_time))
 
             if prev_ecef != (mean_x, mean_y, mean_z):
                 lat, lon, alt = ecef_to_geodetic(mean_x, mean_y, mean_z)
@@ -166,7 +199,7 @@ def monitor_survey_status(connection: ConnectionConfig, timeout: int, min_dur: i
             if valid_flag == 1:
                 saw_in_progress = True
                 lines_to_display = [
-                    f"{Colour.WARNING}Survey-in in progress{Colour.ENDC}: {Colour.BOLD}Elapsed{Colour.ENDC}: {elapsed_time} seconds, {Colour.BOLD}Remaining{Colour.ENDC}: {remaining_time} seconds, {Colour.BOLD}Accuracy{Colour.ENDC}: {coloured_accuracy}, {Colour.BOLD}Observations{Colour.ENDC}: {obs_count}",
+                    f"{Colour.WARNING}Survey-in in progress{Colour.ENDC}: {Colour.BOLD}Elapsed{Colour.ENDC}: {elapsed_time} seconds, {Colour.BOLD}Remaining{Colour.ENDC}: {remaining_time} seconds, {Colour.BOLD}Target{Colour.ENDC}: {target_duration} seconds, {Colour.BOLD}Observations{Colour.ENDC}: {obs_count}, {Colour.BOLD}Accuracy{Colour.ENDC}: {coloured_accuracy}",
                     f"{Colour.HEADER}{Colour.BOLD}ECEF{Colour.ENDC}: {colourised_ecef}",
                     f"{Colour.HEADER}{Colour.BOLD}Geodetic{Colour.ENDC}: {colourised_geo}"
                 ]
@@ -182,27 +215,67 @@ def monitor_survey_status(connection: ConnectionConfig, timeout: int, min_dur: i
                         warned_stale_completion = True
                     continue
 
+                result = {
+                    'completed_at': datetime.now(timezone.utc).isoformat(),
+                    'connection_type': connection.connection_type,
+                    'endpoint': connection.endpoint,
+                    'speed': connection.speed,
+                    'valid_flag': valid_flag,
+                    'observations': obs_count,
+                    'cfg_duration': target_duration,
+                    'mean_accuracy_metres': mean_acc,
+                    'ecef': {
+                        'x': mean_x,
+                        'y': mean_y,
+                        'z': mean_z,
+                    },
+                    'geodetic': {
+                        'latitude': lat,
+                        'longitude': lon,
+                        'altitude': alt,
+                    },
+                }
+                write_survey_result(output_file, result)
+
                 print(Colour.OKGREEN + "Survey-in complete." + Colour.ENDC)
                 print(f"Final {Colour.BOLD}Accuracy{Colour.ENDC}: {coloured_accuracy}")
                 print(f"Final {Colour.BOLD}ECEF{Colour.ENDC}: {current_ecef}")
                 print(f"Final {Colour.BOLD}Geodetic{Colour.ENDC}: {prev_latlon}")
+                print(f"Saved survey result to {output_file}")
                 break
             time.sleep(1)
 
 
 def parse_svin_status(response: str):
-    match = re.match(r"\$PQTMSVINSTATUS,\d+,\d+,(\d+),,(\d+),(\d+),(\d+),(-?\d+\.\d+),(-?\d+\.\d+),(-?\d+\.\d+),(\d+\.\d+)\*\w+", response)
-    if not match:
+    if not response.startswith('$PQTMSVINSTATUS,'):
         return None
+
+    sentence = response.split('*', 1)[0]
+    fields = sentence.split(',')
+    if len(fields) < 11:
+        return None
+
+    try:
+        valid_flag = int(fields[3])
+        res1 = int(fields[5])
+        obs_count = int(fields[6])
+        target_duration = int(fields[7])
+        mean_x = float(fields[8])
+        mean_y = float(fields[9])
+        mean_z = float(fields[10])
+        mean_acc = float(fields[11])
+    except (IndexError, ValueError):
+        return None
+
     return {
-        'valid_flag': int(match.group(1)),
-        'satellites': int(match.group(2)),
-        'elapsed_count': int(match.group(3)),
-        'obs_count': int(match.group(4)),
-        'mean_x': float(match.group(5)),
-        'mean_y': float(match.group(6)),
-        'mean_z': float(match.group(7)),
-        'mean_acc': float(match.group(8)),
+        'valid_flag': valid_flag,
+        'res1': res1,
+        'obs_count': obs_count,
+        'target_duration': target_duration,
+        'mean_x': mean_x,
+        'mean_y': mean_y,
+        'mean_z': mean_z,
+        'mean_acc': mean_acc,
     }
 
 
@@ -233,12 +306,45 @@ def read_gps_messages(connection: ConnectionConfig, timeout: int, verbose: bool 
 
 
 def stream_gps_messages(gps_connection, verbose: bool = False):
+    previous_context = None
+    print_next_svin_context = False
+
     while True:
-        response = read_line(gps_connection)
+        raw_response = read_raw_line(gps_connection)
+        if not raw_response:
+            continue
+
+        response = raw_response.decode('ascii', errors='ignore').strip()
+        current_context = format_serial_context(raw_response)
+
         if response and response.startswith('$'):
+            if print_next_svin_context:
+                print(
+                    f"{Colour.HEADER}Serial context after $PQTMSVINSTATUS:{Colour.ENDC} "
+                    f"{Colour.OKBLUE}{current_context}{Colour.ENDC}"
+                )
+                print_next_svin_context = False
+
             if verbose:
                 print(f"{Colour.OKBLUE}Received message: {response}{Colour.ENDC}")
+
+            if '$PQTMSVINSTATUS' in response:
+                previous_text = previous_context or '<no previous serial line>'
+                print(
+                    f"{Colour.HEADER}Serial context before $PQTMSVINSTATUS:{Colour.ENDC} "
+                    f"{Colour.OKBLUE}{previous_text}{Colour.ENDC}"
+                )
+                print(
+                    f"{Colour.HEADER}Matched $PQTMSVINSTATUS:{Colour.ENDC} "
+                    f"{Colour.OKBLUE}{response}{Colour.ENDC}"
+                )
+                print_next_svin_context = True
+
+            previous_context = current_context
             yield response
+            continue
+
+        previous_context = current_context
 
 def ecef_to_geodetic(x: float, y: float, z: float) -> tuple:
     transformer = Transformer.from_crs("EPSG:4978", "EPSG:4326", always_xy=True)
@@ -286,7 +392,7 @@ def colourise_accuracy(accuracy: float) -> str:
     else:
         return f"{Colour.GREEN}{accuracy:.2f}{Colour.ENDC} metres"
 
-def start_survey_in(connection: ConnectionConfig, timeout: int, min_dur: int, acc_limit: float, verbose: bool):
+def start_survey_in(connection: ConnectionConfig, timeout: int, min_dur: int, acc_limit: float, output_file: str, verbose: bool):
     try:
         with open_connection(connection, timeout) as gps_connection:
             queue_quectel_survey_commands(gps_connection, min_dur, acc_limit, verbose)
@@ -295,7 +401,7 @@ def start_survey_in(connection: ConnectionConfig, timeout: int, min_dur: int, ac
         if connection.connection_type == 'tcp':
             time.sleep(1)
 
-        monitor_survey_status(connection, timeout, min_dur, verbose)
+        monitor_survey_status(connection, timeout, min_dur, output_file, verbose)
     except (ConnectionError, ValueError) as exc:
         print(exc)
 
@@ -322,7 +428,7 @@ def detect_speed(port: str, timeout: int, verbose: bool = False) -> int:
         if verbose:
             print(f"Trying baud rate {speed}...")
         try:
-            with Serial(port, baudrate=speed, timeout=timeout) as ser:
+            with serial.Serial(port, baudrate=speed, timeout=timeout) as ser:
                 ser.write((command_with_checksum + '\r\n').encode('ascii'))
                 if verbose:
                     print(f"Sent command: {Colour.OKBLUE}{command_with_checksum}{Colour.ENDC}")
@@ -331,7 +437,7 @@ def detect_speed(port: str, timeout: int, verbose: bool = False) -> int:
                     if verbose:
                         print(f"{Colour.OKGREEN}Received response at {speed} baud: {response}{Colour.ENDC}")
                     return speed
-        except SerialException:
+        except serial.SerialException:
             if verbose:
                 print(f"{Colour.FAIL}Failed to open serial port at {speed} baud.{Colour.ENDC}")
     raise Exception("Failed to detect baud rate. No valid response for PQTMVERNO command.")
@@ -359,6 +465,7 @@ if __name__ == "__main__":
     parser.add_argument('--ecef', nargs=3, type=float, help="ECEF coordinates (X Y Z) for fixed mode")
     parser.add_argument('--min-dur', type=int, default=86400, help="Minimum duration for survey-in mode (default: 86400 seconds / 1 day)")
     parser.add_argument('--acc-limit', type=float, default=15.0, help="Accuracy limit for survey-in mode in metres (default: 15 metres)")
+    parser.add_argument('--output-file', type=str, default='survey_result.json', help='Write completed survey results to this JSON file (default: survey_result.json)')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
 
     args = parser.parse_args()
@@ -379,7 +486,7 @@ if __name__ == "__main__":
     if args.mode == 'disable':
         disable_survey_in(connection, args.timeout, args.verbose)
     elif args.mode == 'survey':
-        start_survey_in(connection, args.timeout, args.min_dur, args.acc_limit, args.verbose)
+        start_survey_in(connection, args.timeout, args.min_dur, args.acc_limit, args.output_file, args.verbose)
     elif args.mode == 'fixed':
         if not args.ecef:
             print(Colour.FAIL + "Error: You must provide ECEF coordinates for fixed mode." + Colour.ENDC)
