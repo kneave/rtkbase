@@ -3,11 +3,21 @@
 import argparse
 from contextlib import contextmanager
 import socket
-import serial
 import time
 import re
 import sys
 from pyproj import Transformer
+
+try:
+    import serial
+    Serial = serial.Serial
+    SerialException = serial.SerialException
+except (ImportError, AttributeError) as exc:
+    raise SystemExit(
+        "pyserial is required for serial connections, but Python imported an incompatible 'serial' package. "
+        "Uninstall the 'serial' package and install 'pyserial' instead."
+    ) from exc
+
 
 # Terminal colour codes
 class Colour:
@@ -42,9 +52,9 @@ class ConnectionConfig:
 def open_connection(connection: ConnectionConfig, timeout: int):
     if connection.connection_type == 'serial':
         try:
-            with serial.Serial(connection.endpoint, baudrate=connection.speed, timeout=timeout) as serial_connection:
+            with Serial(connection.endpoint, baudrate=connection.speed, timeout=timeout) as serial_connection:
                 yield serial_connection
-        except serial.SerialException as exc:
+        except SerialException as exc:
             raise ConnectionError(f"Error opening serial port: {exc}") from exc
         return
 
@@ -312,7 +322,7 @@ def detect_speed(port: str, timeout: int, verbose: bool = False) -> int:
         if verbose:
             print(f"Trying baud rate {speed}...")
         try:
-            with serial.Serial(port, baudrate=speed, timeout=timeout) as ser:
+            with Serial(port, baudrate=speed, timeout=timeout) as ser:
                 ser.write((command_with_checksum + '\r\n').encode('ascii'))
                 if verbose:
                     print(f"Sent command: {Colour.OKBLUE}{command_with_checksum}{Colour.ENDC}")
@@ -321,7 +331,7 @@ def detect_speed(port: str, timeout: int, verbose: bool = False) -> int:
                     if verbose:
                         print(f"{Colour.OKGREEN}Received response at {speed} baud: {response}{Colour.ENDC}")
                     return speed
-        except serial.SerialException:
+        except SerialException:
             if verbose:
                 print(f"{Colour.FAIL}Failed to open serial port at {speed} baud.{Colour.ENDC}")
     raise Exception("Failed to detect baud rate. No valid response for PQTMVERNO command.")

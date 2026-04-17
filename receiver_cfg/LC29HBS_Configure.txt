@@ -36,3 +36,6 @@ $PAIR062,8,1
 
 #Enable accuracy messages
 $PQTMCFGMSGRATE,W,PQTMEPE,1
+
+#Enable SVIN messages
+$PQTMCFGMSGRATE,W,PQTMSVINSTATUS,1,1
