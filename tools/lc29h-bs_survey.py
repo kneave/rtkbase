@@ -122,6 +122,19 @@ def send_command_batch(connection, commands: list[str], verbose: bool = False, d
         time.sleep(delay)
 
 
+def wait_for_command_response(connection, timeout: int, expected_tokens: list[str], verbose: bool = False) -> str | None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        response = read_line(connection)
+        if not response:
+            continue
+        if verbose:
+            print(f"Received response: {Colour.OKBLUE}{response}{Colour.ENDC}")
+        if any(token in response for token in expected_tokens):
+            return response
+    return None
+
+
 def queue_quectel_survey_commands(connection, min_dur: int, acc_limit: float, verbose: bool = False):
     survey_commands = [
         "$PQTMCFGRCVRMODE,W,2",
@@ -412,11 +425,15 @@ def send_nmea_command(connection: ConnectionConfig, nmea_command: str, timeout: 
             write_line(gps_connection, nmea_command_with_checksum)
             if verbose:
                 print(f"Sent command: {Colour.OKBLUE}{nmea_command_with_checksum}{Colour.ENDC}")
-            
-            response = read_line(gps_connection)
+
+            command_name = nmea_command_with_checksum.split(',', 1)[0].lstrip('$')
+            response = wait_for_command_response(
+                gps_connection,
+                timeout,
+                [command_name, 'OK', 'ERROR'],
+                verbose,
+            )
             if response:
-                if verbose:
-                    print(f"Received response: {Colour.OKBLUE}{response}{Colour.ENDC}")
                 return response
     except (ConnectionError, ValueError) as exc:
         print(exc)
@@ -448,12 +465,38 @@ def disable_survey_in(connection: ConnectionConfig, timeout: int, verbose: bool 
     print(Colour.OKGREEN + "Survey-in disabled." + Colour.ENDC)
 
 def set_fixed_mode(connection: ConnectionConfig, ecef_x: float, ecef_y: float, ecef_z: float, timeout: int, verbose: bool = False):
-    command = f"$PQTMCFGSVIN,W,2,0,0.0,{ecef_x},{ecef_y},{ecef_z}"
-    response = send_nmea_command(connection, command, timeout, verbose)
-    if response and "OK" in response:
-        print(Colour.OKGREEN + "Fixed mode set successfully." + Colour.ENDC)
-    else:
-        print(Colour.FAIL + "Failed to set fixed mode." + Colour.ENDC)
+    fixed_command = f"$PQTMCFGSVIN,W,2,0,0.0,{ecef_x},{ecef_y},{ecef_z}"
+    try:
+        with open_connection(connection, timeout) as gps_connection:
+            write_command(gps_connection, "$PQTMCFGRCVRMODE,W,2", verbose)
+            time.sleep(0.2)
+
+            write_command(gps_connection, fixed_command, verbose)
+            response = wait_for_command_response(
+                gps_connection,
+                timeout,
+                ['PQTMCFGSVIN', 'OK', 'ERROR'],
+                verbose,
+            )
+
+            write_command(gps_connection, "$PQTMSAVEPAR", verbose)
+            time.sleep(0.2)
+            write_command(gps_connection, "$PQTMSRR", verbose)
+
+        if connection.connection_type == 'tcp':
+            time.sleep(1)
+
+        if response and 'ERROR' not in response:
+            print(Colour.OKGREEN + "Fixed mode set successfully." + Colour.ENDC)
+            return
+
+        print(
+            Colour.WARNING
+            + "Fixed mode commands were sent, but no explicit success acknowledgement was received."
+            + Colour.ENDC
+        )
+    except (ConnectionError, ValueError) as exc:
+        print(Colour.FAIL + f"Failed to set fixed mode: {exc}" + Colour.ENDC)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Survey-in and Fixed mode tool for Quectel LC29H-BS GPS module.")
